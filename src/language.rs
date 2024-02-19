@@ -29,6 +29,15 @@ use thiserror::Error;
 /// See [`SymbolLang`] for quick-and-dirty use cases.
 #[allow(clippy::len_without_is_empty)]
 pub trait Language: Debug + Clone + Eq + Ord + Hash {
+    /// Type representing the cases of this language.
+    ///
+    /// Used for short-circuiting the search for equivalent nodes.
+    type Discriminant: Debug + Clone + Eq + Hash;
+
+    /// Return the `Discriminant` of this node.
+    #[allow(enum_intrinsics_non_enums)]
+    fn discriminant(&self) -> Self::Discriminant;
+
     /// Returns true if this enode matches another enode.
     /// This should only consider the operator, not the children `Id`s.
     fn matches(&self, other: &Self) -> bool;
@@ -398,6 +407,12 @@ impl<L> From<Vec<L>> for RecExpr<L> {
     }
 }
 
+impl<L> From<RecExpr<L>> for Vec<L> {
+    fn from(val: RecExpr<L>) -> Self {
+        val.nodes
+    }
+}
+
 impl<L: Language> RecExpr<L> {
     /// Adds a given enode to this `RecExpr`.
     /// The enode's children `Id`s must refer to elements already in this list.
@@ -645,7 +660,7 @@ impl Analysis<SimpleMath> for ConstantFolding {
         egg::merge_max(to, from)
     }
 
-    fn make(egraph: &EGraph<SimpleMath, Self>, enode: &SimpleMath) -> Self::Data {
+    fn make(egraph: &mut EGraph<SimpleMath, Self>, enode: &SimpleMath) -> Self::Data {
         let x = |i: &Id| egraph[*i].data;
         match enode {
             SimpleMath::Num(n) => Some(*n),
@@ -685,10 +700,15 @@ pub trait Analysis<L: Language>: Sized {
     /// The per-[`EClass`] data for this analysis.
     type Data: Debug;
 
-    /// Makes a new [`Analysis`] for a given enode
-    /// [`Analysis`].
+    /// Makes a new [`Analysis`] data for a given e-node.
     ///
-    fn make(egraph: &EGraph<L, Self>, enode: &L) -> Self::Data;
+    /// Note the mutable `egraph` parameter: this is needed for some
+    /// advanced use cases, but most use cases will not need to mutate
+    /// the e-graph in any way.
+    /// It is **not** `make`'s responsiblity to insert the e-node;
+    /// the e-node is "being inserted" when this function is called.
+    /// Doing so will create an infinite loop.
+    fn make(egraph: &mut EGraph<L, Self>, enode: &L) -> Self::Data;
 
     /// An optional hook that allows inspection before a [`union`] occurs.
     /// When explanations are enabled, it gives two ids that represent the two particular terms being unioned, not the canonical ids for the two eclasses.
@@ -745,7 +765,7 @@ pub trait Analysis<L: Language>: Sized {
 
 impl<L: Language> Analysis<L> for () {
     type Data = ();
-    fn make(_egraph: &EGraph<L, Self>, _enode: &L) -> Self::Data {}
+    fn make(_egraph: &mut EGraph<L, Self>, _enode: &L) -> Self::Data {}
     fn merge(&mut self, _: &mut Self::Data, _: Self::Data) -> DidMerge {
         DidMerge(false, false)
     }
@@ -826,6 +846,12 @@ impl SymbolLang {
 }
 
 impl Language for SymbolLang {
+    type Discriminant = Symbol;
+
+    fn discriminant(&self) -> Self::Discriminant {
+        self.op
+    }
+
     fn matches(&self, other: &Self) -> bool {
         self.op == other.op && self.len() == other.len()
     }
